@@ -3,6 +3,13 @@ sculpt-email
 
 Email is a pain in the butt. On the one hand it's essential and expected, on the other it's a nuisance to deal with because Django's support for it is very basic.
 
+Special Note
+------------
+
+This is not a complete project. It's not packaged as a Python project (so you have to drop the source into your own project directly), the directory structure doesn't match the package's expectations of itself, there are no unit tests, and the only documentation is within the code itself. I don't really expect anyone else to use this code... yet. All of those things will be addressed at some point.
+
+That said, the code _is_ being used. This started with work I did while at Caxiam (and I obtained a comprehensive license to continue with the code) so here and there are references to Caxiam that I am slowly replacing. I've done quite a bit of refactoring since then and expect to do more.
+
 Features
 --------
 
