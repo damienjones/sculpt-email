@@ -78,6 +78,9 @@ def send_mail(template_path, tolist, from_email = None, data = None, attachments
             'from_email': from_email,
             'site_hostname': settings.SCULPT_EMAIL_SITE_HOSTNAME,
             'site_url': settings.SCULPT_SITE_PROTOCOL + settings.SCULPT_EMAIL_SITE_HOSTNAME + '/',
+            # these may not be available
+            'MEDIA_URL': settings.MEDIA_URL,
+            'STATIC_URL': settings.STATIC_URL,
         })
 
     # use the same context for subject and body
