@@ -1,86 +1,79 @@
 from django.conf import settings
-from django.core.mail import send_mail as django_send_mail, EmailMultiAlternatives
+from django.core.mail import EmailMultiAlternatives
 from django.db import models
-from django.template import Context
+from django.template import TemplateDoesNotExist
 from django.template.loader import get_template, select_template
 
+from sculpt.common import Enumeration
+
 import datetime
+import re
 import os
 import os.path
 
 # You will need to define some values in your settings file
 # in order to use this, in addition to the regular email
-# settings.
+# settings. See default_settings.py for instructions.
 #
-#   SCULPT_EMAIL_FROM               sender address for email (not the same as mail server username)
-#   SCULPT_EMAIL_OVERRIDE_TOLIST    if set, replaces ALL email destination addresses with this list (for debugging)
-#   SCULPT_EMAIL_TEMPLATE_BASE      base directory in templates that contains email
-#   SCULPT_EMAIL_FAIL_SILENTLY      whether to ignore errors in email; DO NOT set True for production
-#   SCULPT_EMAIL_USE_BRANDING       whether to use branding in template paths
-#   SCULPT_EMAIL_SITE_HOSTNAME      hostname to pass in context data to templates
+# Email templates are specified by folder; each folder is
+# inspected to see what format the email message should be
+# in. This makes it easy to prototype using plaintext mail
+# and upgrade to HTML mail later. Within each folder:
 #
-# Email templates are stored in folders, in this hierarchy:
+#   subject.txt         subject line of message
+#   body.txt            plain text body of message
+#   body.html           HTML body of message
 #
-#   <email_template_base>/email/<template_path>/<brand>/subject.txt         subject line of message
-#   <email_template_base>/email/<template_path>/<brand>/body.txt            plaintext body of message
-#   <email_template_base>/email/<template_path>/<brand>/body.html           HTML body of message (TODO)
+# All templates will be passed the same data. If you pass
+# a request object, it will be given to the template to
+# use for rendering.
 #
-# The default <brand> is "base". If branding is turned off,
-# the brand folder level is omitted.
-#
-# All templates will be passed the same data, and ONLY
-# that data; this is not a RequestContext so will not have
-# any template context processors applied to it. You may
-# also pass in a Context-derived object and it will be
-# passed as-is, so you can pass a RequestContext if you
-# like.
+# A list of template paths may be given instead of a
+# single path. This is useful if there are multiple
+# versions of an email template (for branding, translation,
+# etc.)
 
 # prep and send an email message
-def send_mail(template_path, tolist, from_email = None, data = None, brand = None):
+def send_mail(template_path, tolist, from_email = None, data = None, attachments = None, request = None):
+    if not isinstance(tolist, (list,tuple)):
+        tolist = [ tolist ]
     if from_email == None:
         from_email = settings.SCULPT_EMAIL_FROM
     if data == None:
         data = {}
 
-    # make sure the path has been lower-cased
-    template_path = os.path.join(settings.SCULPT_EMAIL_TEMPLATE_BASE, 'email', template_path.lower())
-
-    # decide if we're looking for a brand-specific template or not
-    if not settings.SCULPT_EMAIL_USE_BRANDING:
-        template_paths = [ template_path ]
-    elif brand == None:
-        template_paths = [ os.path.join(template_path, 'base') ]
+    # make sure we have a list of template paths
+    if isinstance(template_path, (list, tuple)):
+        template_paths = template_path
     else:
-        template_paths = [ os.path.join(template_path, brand), os.path.join(template_path, 'base') ]
+        template_paths = [ template_path ]
 
-    body_list = [ os.path.join(p, 'body.txt') for p in template_paths ]
-    body_list.extend([ os.path.join(p, 'body.html') for p in template_paths ])
+    # create a full list of body templates we're looking for
+    body_list = []
+    for p in template_paths:
+        body_list.append(os.path.join(p, 'body.html'))
+        body_list.append(os.path.join(p, 'body.txt'))
 
     # fetch the templates
     subject_template = select_template([ os.path.join(p, 'subject.txt') for p in template_paths ])
-    body_template = select_template(body_list)
+    try:
+        body_html_template = select_template([ os.path.join(p, 'body.html') for p in template_paths ])
+    except TemplateDoesNotExist:
+        body_html_template = None
+    try:
+        body_text_template = select_template([ os.path.join(p, 'body.txt') for p in template_paths ])
+    except TemplateDoesNotExist:
+        body_text_template = None
 
-    # If you include the file html_type inside one of the
-    # appropriate folders, then it will render out as an HTML
-    # email
-    # If the templates do not exist they will throw a template not found error
-    html_type = False
-    if ody_template.name.endswith('.html'):
-        html_type = True
+    if body_html_template is None and body_text_template is None:
+        raise Exception('neither plain text nor HTML body could be found')
 
-    # fill out the template
-
-    # we'd love to use RequestContext but we don't have request
-    # this deep in the call stack; we hope that if someone needs
-    # that they will create a RequestContext object and pass it
-    # as data
-    if not isinstance(data, Context):
-        data = Context(data)
+    # fill out the templates
 
     # we have additional data we need to supply, so that all
     # email templates can be rendered appropriately (e.g. HTML
     # templates need to know what external URL to use for any
-    # images, if the receiving client permits them)
+    # images)
     data.update({
             'from_email': from_email,
             'site_hostname': settings.SCULPT_EMAIL_SITE_HOSTNAME,
@@ -88,23 +81,45 @@ def send_mail(template_path, tolist, from_email = None, data = None, brand = Non
         })
 
     # use the same context for subject and body
-    subject = subject_template.render(data)
-    body = body_template.render(data)
+    subject = subject_template.render(data, request)
 
-    # send the email
+    if body_html_template is not None:
+        body_html = body_html_template.render(data, request)
+    else:
+        body_html = None
+
+    if body_text_template is not None:
+        body_text = body_text_template.render(data, request)
+    else:
+        body_text = None
+
+    # determine who to send it to
     if settings.SCULPT_EMAIL_OVERRIDE_TOLIST:
         print "[pid:%d]" % os.getpid(), "SENDING EMAIL TO " + repr(settings.SCULPT_EMAIL_OVERRIDE_TOLIST) + " instead of " + repr(tolist)
         tolist = settings.SCULPT_EMAIL_OVERRIDE_TOLIST
     else:
         print "[pid:%d]" % os.getpid(), "SENDING EMAIL TO " + repr(tolist)
 
-    # If it's an html type email then it will need to adjusted so
-    # that it's sending it out via the EmailMultiAlternatives type,
-    # rather than plain text.
-    if html_type:
-        msg = EmailMultiAlternatives(subject, body, from_email, tolist)
-        msg.content_subtype = 'html'    # Main content is now text/html
-        msg.send(fail_silently = settings.SCULPT_EMAIL_FAIL_SILENTLY)
+    # generate the message
+    message = EmailMultiAlternatives(
+            subject = subject,
+            body = body_text if body_text is not None else body_html,
+            from_email = from_email,
+            to = tolist,
+        )
+    if body_text is None:
+        # we only have an HTML type
+        message.content_subtype = 'html'    # main type is always 'text'
+    
+    elif body_html is not None:
+        # we used the plain text, but we also have
+        # an HTML version
+        message.attach_alternative(body_html, 'text/html')
 
-    else:
-        django_send_mail(subject, body, from_email, tolist, fail_silently = settings.SCULPT_EMAIL_FAIL_SILENTLY)
+    # attach any files
+    if attachments is not None:
+        for a in attachments:
+            message.attach(**a)
+
+    # send the message
+    message.send(fail_silently = settings.SCULPT_EMAIL_FAIL_SILENTLY)
