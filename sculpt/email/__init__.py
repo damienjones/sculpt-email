@@ -84,7 +84,7 @@ def send_mail(template_path, tolist, from_email = None, data = None, attachments
         })
 
     # use the same context for subject and body
-    subject = subject_template.render(data, request)
+    subject = subject_template.render(data, request).strip()
 
     if body_html_template is not None:
         body_html = body_html_template.render(data, request)
